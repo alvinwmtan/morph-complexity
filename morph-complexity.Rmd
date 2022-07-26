@@ -1,0 +1,97 @@
+---
+title: "Morphological Complexity"
+author: "Alvin Tan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(glue)
+library(here)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r import}
+# data
+files <- list.files(here("data")) %>%
+  grep("[0-9][a-z].csv", ., value = TRUE)
+all_vals <- lapply(files, \(x) read_csv(here("data", x))) |> 
+  bind_rows()
+
+all_vals <- all_vals |> 
+  separate(id, c("fid", "id"), sep = "-") |> 
+  select(fid, id, domainelement = domainelement_pk)
+
+# auxiliary
+langs <- read_csv(here("data", "languages.csv")) |> 
+  select(id = ID, iso_codes = ISO_codes, genus = Genus, name = Name)
+values <- read_csv(here("data", "values.csv")) |> 
+  group_by(fid) |> 
+  mutate(old_val = value / max_value,
+         new_val = (value - min(value, na.rm = TRUE)) /
+           (length(unique(value[!is.na(value)])) - 1)) |> 
+  ungroup()
+
+data_df <- all_vals |> 
+  left_join(langs, by = "id") |> 
+  left_join(values, by = c("fid", "domainelement"))
+```
+
+```{r data-agg}
+cwals <- data_df |> 
+  group_by(id) |> 
+  filter(!is.na(value)) |> 
+  summarise(n_feat = n(),
+            cwals_old = mean(old_val),
+            cwals_new = mean(new_val)) |> 
+  left_join(langs, by = "id") |> 
+  separate_rows(iso_codes, sep = " ")
+
+cwals_byiso <- cwals |> 
+  group_by(iso_codes) |> 
+  summarise(n_feat = mean(n_feat),
+            cwals_old = mean(cwals_old),
+            cwals_new = mean(cwals_new)) |> 
+  left_join(langs |> distinct(iso_codes, .keep_all = T), by = "iso_codes")
+
+write_csv(cwals_byiso, "cwals.csv")
+
+old_data <- read_csv(here("data", "MorphCompl_519.csv"))
+
+cwals_compare <- old_data |> 
+  left_join(cwals_byiso, by = c("iso" = "iso_codes")) |> 
+  mutate(diff_n = WALS_NumChap != n_feat,
+         diff_c = abs(C_WALS - cwals_old) > 1e-10)
+```
+
+```{r cor}
+num_cor <- lapply(1:27, \(x) {
+  cwals_compare |> 
+    filter(n_feat >= x) |> 
+    summarise(n = n(),
+              cor_old_d = cor(C_D, cwals_old, method = "spearman"),
+              cor_old_h = cor(C_H, cwals_old, method = "spearman"),
+              cor_old_a = cor(C_A, cwals_old, method = "spearman"),
+              cor_old_ttr = cor(C_TTR, cwals_old, method = "spearman"),
+              cor_new_d = cor(C_D, cwals_new, method = "spearman"),
+              cor_new_h = cor(C_H, cwals_new, method = "spearman"),
+              cor_new_a = cor(C_A, cwals_new, method = "spearman"),
+              cor_new_ttr = cor(C_TTR, cwals_new, method = "spearman")) |> 
+    mutate(n_feat = x)
+}) |> bind_rows() |> 
+  select(n_feat, everything())
+
+num_cor_plot <- num_cor |> 
+  pivot_longer(cols = starts_with("cor"), names_to = "cor") |> 
+  separate(cor, into = c("cor", "version", "metric"), sep = "_") |> 
+  select(-cor)
+
+cor_plot <- ggplot(num_cor_plot,
+                   aes(x = n_feat, y = value, col = metric, lty = version)) +
+  geom_line() +
+  geom_point(aes(size = n), alpha = .5)
+```
+
+
+
